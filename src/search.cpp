@@ -876,10 +876,16 @@ Value Search::Worker::search(
     {
         auto futility_margin = [&](Depth d) {
             Value futilityMult = 76 - 23 * !ss->ttHit;
+            int   vAccel       = 0;
+
+            if ((ss - 1)->staticEval != VALUE_NONE && (ss - 2)->staticEval != VALUE_NONE)
+                vAccel = std::abs(ss->staticEval + 2 * (ss - 1)->staticEval + (ss - 2)->staticEval);
+
+            int topologyCorrection = (24 * vAccel * d) / 1024;
 
             return futilityMult * d
                  - (2474 * improving + 331 * opponentWorsening) * futilityMult / 1024  //
-                 + std::abs(correctionValue) / 174665;
+                 + std::abs(correctionValue) / 174665 + topologyCorrection;
         };
 
         if (!ss->ttPv && depth < 14 && eval - futility_margin(depth) >= beta && eval >= beta
