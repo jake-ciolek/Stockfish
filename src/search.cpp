@@ -1625,14 +1625,21 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         // Step 6. Pruning
         if (!is_loss(bestValue))
         {
+            const Piece     toPiece      = pos.piece_on(move.to_sq());
+            const PieceType toType       = type_of(toPiece);
+            const Value     seeThresh    = alpha - futilityBase;
+            const bool      heavyCapture = (toType == ROOK || toType == QUEEN);
+            const bool      tightBand    = seeThresh <= Value(80);
+            const bool      rescueCount  = tightBand && heavyCapture && moveCount == 3;
+
             // Futility pruning and moveCount pruning
             if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase)
                 && move.type_of() != PROMOTION)
             {
-                if (moveCount > 2)
+                if (moveCount > 2 && !rescueCount)
                     continue;
 
-                Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
+                Value futilityValue = futilityBase + PieceValue[toPiece];
 
                 // If static eval + value of piece we are going to capture is
                 // much lower than alpha, we can prune this move.
@@ -1644,7 +1651,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
                 // If static exchange evaluation is low enough
                 // we can prune this move.
-                if (!pos.see_ge(move, alpha - futilityBase))
+                if (!pos.see_ge(move, seeThresh))
                 {
                     bestValue = std::min(alpha, futilityBase);
                     continue;
@@ -1656,7 +1663,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                 continue;
 
             // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -80))
+            const bool rescueLowSee = tightBand && heavyCapture;
+            if (!rescueLowSee && !pos.see_ge(move, -80))
                 continue;
         }
 
