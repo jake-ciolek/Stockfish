@@ -182,7 +182,6 @@ void Search::Worker::ensure_network_replicated() {
 void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
-
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
     {
@@ -1629,7 +1628,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase)
                 && move.type_of() != PROMOTION)
             {
-                if (moveCount > 2)
+                const int maxMoves = (posKey & 1ULL) ? 2 : 1;  // pseudo-random 50:50 cap (avg 1.5)
+                if (moveCount > maxMoves)
                     continue;
 
                 Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
