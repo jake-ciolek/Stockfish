@@ -1662,8 +1662,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!capture)
                 continue;
 
+            int treshold = (type_of(pos.piece_on(move.from_sq())) >= ROOK) ? -40 : -120;
+
             // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -80))
+            if (!pos.see_ge(move, treshold))
                 continue;
         }
 
