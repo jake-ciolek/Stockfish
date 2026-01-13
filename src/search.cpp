@@ -1057,6 +1057,11 @@ moves_loop:  // When in check, search starts here
             // Reduced depth of the next LMR search
             int lmrDepth = newDepth - r / 1024;
 
+            int clamped = std::max(lmrDepth, 0);
+
+            if (!capture && !pos.see_ge(move, -(21 + givesCheck * 65) * clamped * clamped))
+                continue;
+
             if (capture || givesCheck)
             {
                 Piece capturedPiece = pos.piece_on(move.to_sq());
@@ -1107,12 +1112,6 @@ moves_loop:  // When in check, search starts here
                         bestValue = futilityValue;
                     continue;
                 }
-
-                lmrDepth = std::max(lmrDepth, 0);
-
-                // Prune moves with negative SEE
-                if (!pos.see_ge(move, -25 * lmrDepth * lmrDepth))
-                    continue;
             }
         }
 
