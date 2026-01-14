@@ -1515,7 +1515,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     Key   posKey;
     Move  move, bestMove;
     Value bestValue, value, futilityBase;
-    bool  pvHit, givesCheck, capture;
+    bool  pvHit, givesCheck, capture, improving;
     int   moveCount;
 
     // Step 1. Initialize node
@@ -1528,6 +1528,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     bestMove    = Move::none();
     ss->inCheck = pos.checkers();
     moveCount   = 0;
+    improving   = false;
 
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)
     if (PvNode && selDepth < ss->ply + 1)
@@ -1601,7 +1602,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         if (bestValue > alpha)
             alpha = bestValue;
 
-        futilityBase = ss->staticEval + 351;
+        improving    = ss->staticEval > (ss - 2)->staticEval;
+        futilityBase = ss->staticEval + (improving ? 319 : 351);
     }
 
     const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
