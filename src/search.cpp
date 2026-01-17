@@ -545,17 +545,12 @@ void Search::Worker::iterative_deepening() {
 
 
 void Search::Worker::do_move(Position& pos, const Move move, StateInfo& st, Stack* const ss) {
-    do_move(pos, move, st, pos.gives_check(move), ss);
-}
-
-void Search::Worker::do_move(
-  Position& pos, const Move move, StateInfo& st, const bool givesCheck, Stack* const ss) {
     bool capture = pos.capture_stage(move);
     // Preferable over fetch_add to avoid locking instructions
     nodes.store(nodes.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 
     auto [dirtyPiece, dirtyThreats] = accumulatorStack.push();
-    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
+    pos.do_move(move, st, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
 
     if (ss != nullptr)
     {
@@ -1181,7 +1176,7 @@ moves_loop:  // When in check, search starts here
         }
 
         // Step 16. Make the move
-        do_move(pos, move, st, givesCheck, ss);
+        do_move(pos, move, st, ss);
 
         // Add extension to new depth
         newDepth += extension;
@@ -1515,7 +1510,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     Key   posKey;
     Move  move, bestMove;
     Value bestValue, value, futilityBase;
-    bool  pvHit, givesCheck, capture;
+    bool  pvHit;
     int   moveCount;
 
     // Step 1. Initialize node
@@ -1623,16 +1618,13 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         if (!pos.legal(move))
             continue;
 
-        givesCheck = pos.gives_check(move);
-        capture    = pos.capture_stage(move);
-
         moveCount++;
 
         // Step 6. Pruning
         if (!is_loss(bestValue))
         {
             // Futility pruning and moveCount pruning
-            if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase)
+            if (!pos.gives_check(move) && move.to_sq() != prevSq && !is_loss(futilityBase)
                 && move.type_of() != PROMOTION)
             {
                 if (moveCount > 2)
@@ -1658,7 +1650,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             }
 
             // Skip non-captures
-            if (!capture)
+            if (!pos.capture_stage(move))
                 continue;
 
             // Do not search moves with bad enough SEE values
@@ -1667,7 +1659,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         }
 
         // Step 7. Make and search the move
-        do_move(pos, move, st, givesCheck, ss);
+        do_move(pos, move, st, ss);
 
         value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);
         undo_move(pos, move);

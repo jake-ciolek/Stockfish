@@ -700,7 +700,6 @@ bool Position::gives_check(Move m) const {
 // will be prefetched, and likewise for shared history.
 void Position::do_move(Move                      m,
                        StateInfo&                newSt,
-                       bool                      givesCheck,
                        DirtyPiece&               dp,
                        DirtyThreats&             dts,
                        const TranspositionTable* tt      = nullptr,
@@ -709,7 +708,8 @@ void Position::do_move(Move                      m,
     assert(m.is_ok());
     assert(&newSt != st);
 
-    Key k = st->key ^ Zobrist::side;
+    const bool givesCheck = gives_check(m);
+    Key        k          = st->key ^ Zobrist::side;
 
     // Copy some fields of the old state to our new StateInfo object except the
     // ones which are going to be recalculated from scratch anyway and then switch
