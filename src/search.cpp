@@ -259,6 +259,8 @@ void Search::Worker::start_searching() {
 void Search::Worker::iterative_deepening() {
 
     SearchManager* mainThread = (is_mainthread() ? main_manager() : nullptr);
+    bool           isCrazy    = (threadIdx % 8) == 6;
+    bool           isDeep     = (threadIdx % 8) == 7;
 
     Move pv[MAX_PLY + 1];
 
@@ -354,6 +356,10 @@ void Search::Worker::iterative_deepening() {
             // Reset aspiration window starting size
             delta     = 5 + threadIdx % 8 + std::abs(rootMoves[pvIdx].meanSquaredScore) / 9000;
             Value avg = rootMoves[pvIdx].averageScore;
+            if (isCrazy)
+                delta = 2500;
+            else if (isDeep)
+                delta = 10;
             alpha     = std::max(avg - delta, -VALUE_INFINITE);
             beta      = std::min(avg + delta, VALUE_INFINITE);
 
@@ -618,6 +624,8 @@ Value Search::Worker::search(
     constexpr bool PvNode   = nodeType != NonPV;
     constexpr bool rootNode = nodeType == Root;
     const bool     allNode  = !(PvNode || cutNode);
+    bool           isCrazy  = (threadIdx % 8) == 6;
+    bool           isDeep   = (threadIdx % 8) == 7;
 
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
@@ -1040,6 +1048,10 @@ moves_loop:  // When in check, search starts here
         int delta = beta - alpha;
 
         Depth r = reduction(improving, depth, moveCount, delta);
+        if (isCrazy)
+            r -= 1024;
+        else if (isDeep)
+            r += 1024;
 
         // Increase reduction for ttPv nodes (*Scaler)
         // Larger values scale well
@@ -1100,7 +1112,7 @@ moves_loop:  // When in check, search starts here
                 // Futility pruning: parent node
                 // (*Scaler): Generally, more frequent futility pruning
                 // scales well
-                if (!ss->inCheck && lmrDepth < 13 && futilityValue <= alpha)
+                if (!isCrazy && !ss->inCheck && lmrDepth < 13 && futilityValue <= alpha)
                 {
                     if (bestValue <= futilityValue && !is_decisive(bestValue)
                         && !is_win(futilityValue))
