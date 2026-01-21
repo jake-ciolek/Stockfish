@@ -747,11 +747,12 @@ Value Search::Worker::search(
     // false otherwise. The improving flag is used in various pruning heuristics.
     // Similarly, opponentWorsening is true if our static evaluation is better
     // for us than at the last ply.
-    improving         = ss->staticEval > (ss - 2)->staticEval;
-    opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
+    improving               = ss->staticEval > (ss - 2)->staticEval;
+    opponentWorsening       = ss->staticEval > -(ss - 1)->staticEval;
+    bool opponentWorsening2 = ss->staticEval > -(ss - 3)->staticEval;
 
     // Hindsight adjustment of reductions based on static evaluation difference.
-    if (priorReduction >= 3 && !opponentWorsening)
+    if (priorReduction >= 3 && !opponentWorsening && !opponentWorsening2)
         depth++;
     if (priorReduction >= 2 && depth >= 2 && ss->staticEval + (ss - 1)->staticEval > 173)
         depth--;
