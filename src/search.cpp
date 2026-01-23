@@ -1515,7 +1515,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     Key   posKey;
     Move  move, bestMove;
     Value bestValue, value, futilityBase;
-    bool  pvHit, givesCheck, capture;
+    bool  pvHit, givesCheck, capture, improving;
     int   moveCount;
 
     // Step 1. Initialize node
@@ -1528,7 +1528,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     bestMove    = Move::none();
     ss->inCheck = pos.checkers();
     moveCount   = 0;
-
+    improving = false;
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)
     if (PvNode && selDepth < ss->ply + 1)
         selDepth = ss->ply + 1;
@@ -1601,7 +1601,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         if (bestValue > alpha)
             alpha = bestValue;
 
-        futilityBase = ss->staticEval + 351;
+        improving = ss->staticEval > (ss - 2)->staticEval;
+        futilityBase = ss->staticEval + (improving ? 319 : 351);
     }
 
     const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
@@ -1628,6 +1629,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
         moveCount++;
 
+        const int lim = PvNode ? 3 : 2;
+
         // Step 6. Pruning
         if (!is_loss(bestValue))
         {
@@ -1635,7 +1638,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase)
                 && move.type_of() != PROMOTION)
             {
-                if (moveCount > 2)
+                if (moveCount > lim)
                     continue;
 
                 Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
@@ -1650,7 +1653,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
                 // If static exchange evaluation is low enough
                 // we can prune this move.
-                if (!pos.see_ge(move, alpha - futilityBase))
+                if (!pos.see_ge(move, alpha - futilityBase  + 25 * !PvNode))
                 {
                     bestValue = std::max(bestValue, std::min(alpha, futilityBase));
                     continue;
@@ -1662,7 +1665,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                 continue;
 
             // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -80))
+            if (!pos.see_ge(move, PvNode ? -160 : -80))
                 continue;
         }
 
