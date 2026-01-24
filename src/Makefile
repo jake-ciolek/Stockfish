@@ -63,8 +63,8 @@ endif
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
 
-### Built-in benchmark for pgo-builds
-PGOBENCH = $(RUN_PREFIX) ./$(EXE) bench
+### Built-in benchmark for pgo-builds (depth 14)
+PGOBENCH = $(RUN_PREFIX) ./$(EXE) bench 16 1 14
 
 ### Source and object files
 SRCS = benchmark.cpp bitboard.cpp evaluate.cpp main.cpp \
