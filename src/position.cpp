@@ -1332,7 +1332,8 @@ bool Position::see_ge(Move m, int threshold) const {
         // pinners on their original square.
         if (pinners(~stm) & occupied)
         {
-            stmAttackers &= ~blockers_for_king(stm);
+            Bitboard pinned = blockers_for_king(stm);
+            stmAttackers &= ~pinned | line_bb(square<KING>(stm), to);
 
             if (!stmAttackers)
                 break;
