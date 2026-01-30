@@ -1304,13 +1304,13 @@ bool Position::see_ge(Move m, int threshold) const {
 
     assert(piece_on(from) != NO_PIECE);
 
-    int swap = PieceValue[piece_on(to)] - threshold;
-    if (swap < 0)
-        return false;
+    int swap  = PieceValue[piece_on(to)] - threshold;
+    int swing = PieceValue[piece_on(from)] - swap;
 
-    swap = PieceValue[piece_on(from)] - swap;
-    if (swap <= 0)
-        return true;
+    if (swap < 0 || swing <= 0)
+        return swing <= 0;
+
+    swap = swing;
 
     assert(color_of(piece_on(from)) == sideToMove);
     Bitboard occupied  = pieces() ^ from ^ to;  // xoring to is important for pinned piece logic
@@ -1325,18 +1325,16 @@ bool Position::see_ge(Move m, int threshold) const {
         attackers &= occupied;
 
         // If stm has no more attackers then give up: stm loses
-        if (!(stmAttackers = attackers & pieces(stm)))
-            break;
+        stmAttackers = attackers & pieces(stm);
 
         // Don't allow pinned pieces to attack as long as there are
         // pinners on their original square.
-        if (pinners(~stm) & occupied)
-        {
-            stmAttackers &= ~blockers_for_king(stm);
+        Bitboard pinMask = blockers_for_king(stm)
+                         & -(Bitboard)((pinners(~stm) & occupied) != 0);
+        stmAttackers &= ~pinMask;
 
-            if (!stmAttackers)
-                break;
-        }
+        if (!stmAttackers)
+            break;
 
         res ^= 1;
 
