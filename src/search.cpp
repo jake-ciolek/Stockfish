@@ -1516,7 +1516,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     Key   posKey;
     Move  move, bestMove;
     Value bestValue, value, futilityBase;
-    bool  pvHit, givesCheck, capture;
+    bool  pvHit, givesCheck, capture, big;
     int   moveCount;
 
     // Step 1. Initialize node
@@ -1626,6 +1626,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
         givesCheck = pos.gives_check(move);
         capture    = pos.capture_stage(move);
+        big        = (type_of(pos.piece_on(move.to_sq())) >= ROOK);
 
         moveCount++;
 
@@ -1633,7 +1634,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         if (!is_loss(bestValue))
         {
             // Futility pruning and moveCount pruning
-            if (!givesCheck && move.to_sq() != prevSq && !is_loss(futilityBase)
+            if (!givesCheck && !big && move.to_sq() != prevSq && !is_loss(futilityBase)
                 && move.type_of() != PROMOTION)
             {
                 if (moveCount > 2)
