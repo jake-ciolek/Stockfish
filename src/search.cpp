@@ -1639,11 +1639,13 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                 if (moveCount > 2)
                     continue;
 
+                int s = 25 * (2 * moveCount - 3);
+
                 Value futilityValue = futilityBase + PieceValue[pos.piece_on(move.to_sq())];
 
                 // If static eval + value of piece we are going to capture is
                 // much lower than alpha, we can prune this move.
-                if (futilityValue <= alpha)
+                if (futilityValue <= alpha + s)
                 {
                     bestValue = std::max(bestValue, futilityValue);
                     continue;
@@ -1651,7 +1653,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
                 // If static exchange evaluation is low enough
                 // we can prune this move.
-                if (!pos.see_ge(move, alpha - futilityBase))
+                if (!pos.see_ge(move, alpha - futilityBase + s))
                 {
                     bestValue = std::max(bestValue, std::min(alpha, futilityBase));
                     continue;
