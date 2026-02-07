@@ -1149,6 +1149,11 @@ moves_loop:  // When in check, search starts here
                 extension =
                   1 + (value < singularBeta - doubleMargin) + (value < singularBeta - tripleMargin);
 
+                if (!PvNode && extension > 2
+                    && (((uint64_t(posKey)
+                          ^ (uint64_t(ss->ply) * 0x9e3779b97f4a7c15ULL)) & 63ULL) == 0))
+                    extension++;
+
                 depth++;
             }
 
