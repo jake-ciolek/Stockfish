@@ -1258,24 +1258,86 @@ bool Position::see_ge(Move m, int threshold) const {
 
     assert(m.is_ok());
 
-    // Only deal with normal moves, assume others pass a simple SEE
-    if (m.type_of() != NORMAL)
+    const Color  us        = sideToMove;
+    const Square from      = m.from_sq();
+    const Square to        = m.to_sq();
+    const Piece  movedPiece = piece_on(from);
+
+    assert(movedPiece != NO_PIECE);
+    assert(color_of(movedPiece) == us);
+
+    int      movedValue    = 0;
+    int      capturedValue = 0;
+    Bitboard occupied      = 0;
+
+    switch (m.type_of())
+    {
+    case NORMAL :
+        movedValue    = PieceValue[movedPiece];
+        capturedValue = PieceValue[piece_on(to)];
+        occupied      = pieces() ^ from ^ to;  // xoring to is important for pinned piece logic
+        break;
+
+    case PROMOTION :
+        movedValue    = PieceValue[make_piece(us, m.promotion_type())];
+        capturedValue = PieceValue[piece_on(to)];
+        occupied      = pieces() ^ from ^ to;
+        break;
+
+    case EN_PASSANT : {
+        const Square capsq = to - pawn_push(us);
+
+        assert(movedPiece == make_piece(us, PAWN));
+        assert(piece_on(to) == NO_PIECE);
+        assert(piece_on(capsq) == make_piece(~us, PAWN));
+
+        movedValue    = PawnValue;
+        capturedValue = PawnValue;
+        occupied      = (pieces() ^ from ^ capsq) | to;
+        break;
+    }
+
+    default :  // CASTLING
         return VALUE_ZERO >= threshold;
+    }
 
-    Square from = m.from_sq(), to = m.to_sq();
-
-    assert(piece_on(from) != NO_PIECE);
-
-    int swap = PieceValue[piece_on(to)] - threshold;
+    int swap = capturedValue - threshold;
     if (swap < 0)
         return false;
 
-    swap = PieceValue[piece_on(from)] - swap;
+    swap = movedValue - swap;
     if (swap <= 0)
         return true;
 
-    assert(color_of(piece_on(from)) == sideToMove);
-    Bitboard occupied  = pieces() ^ from ^ to;  // xoring to is important for pinned piece logic
+    const Bitboard pawns     = pieces(PAWN);
+    const Bitboard knights   = pieces(KNIGHT);
+    const Bitboard bishops   = pieces(BISHOP);
+    const Bitboard rooks     = pieces(ROOK);
+    const Bitboard queens    = pieces(QUEEN);
+    const Bitboard diagRays  = pieces(BISHOP, QUEEN);
+    const Bitboard orthoRays = pieces(ROOK, QUEEN);
+
+    auto blockers_for_king_virtual = [&](Color c, Bitboard occ) {
+
+        const Square ksq = square<KING>(c);
+
+        Bitboard snipers = ((attacks_bb<ROOK>(ksq) & orthoRays) | (attacks_bb<BISHOP>(ksq) & diagRays))
+                         & pieces(~c) & occ;
+        Bitboard occNoSnipers = occ ^ snipers;
+        Bitboard blockers     = 0;
+        Bitboard ownPieces    = pieces(c) & occ;
+
+        while (snipers)
+        {
+            const Square   sniperSq = pop_lsb(snipers);
+            const Bitboard b        = between_bb(ksq, sniperSq) & occNoSnipers;
+
+            if (b && !more_than_one(b) && (b & ownPieces))
+                blockers |= b;
+        }
+        return blockers;
+    };
+
     Color    stm       = sideToMove;
     Bitboard attackers = attackers_to(to, occupied);
     Bitboard stmAttackers, bb;
@@ -1290,11 +1352,11 @@ bool Position::see_ge(Move m, int threshold) const {
         if (!(stmAttackers = attackers & pieces(stm)))
             break;
 
-        // Don't allow pinned pieces to attack as long as there are
-        // pinners on their original square.
-        if (pinners(~stm) & occupied)
+        // Recompute pinned pieces for SEE virtual occupancy.
+        const Bitboard pinned = blockers_for_king_virtual(stm, occupied);
+        if (pinned)
         {
-            stmAttackers &= ~blockers_for_king(stm);
+            stmAttackers &= ~pinned | line_bb(square<KING>(stm), to);
 
             if (!stmAttackers)
                 break;
@@ -1304,55 +1366,59 @@ bool Position::see_ge(Move m, int threshold) const {
 
         // Locate and remove the next least valuable attacker, and add to
         // the bitboard 'attackers' any X-ray attackers behind it.
-        if ((bb = stmAttackers & pieces(PAWN)))
+        if ((bb = stmAttackers & pawns))
         {
             if ((swap = PawnValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & diagRays;
         }
 
-        else if ((bb = stmAttackers & pieces(KNIGHT)))
+        else if ((bb = stmAttackers & knights))
         {
             if ((swap = KnightValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
         }
 
-        else if ((bb = stmAttackers & pieces(BISHOP)))
+        else if ((bb = stmAttackers & bishops))
         {
             if ((swap = BishopValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & diagRays;
         }
 
-        else if ((bb = stmAttackers & pieces(ROOK)))
+        else if ((bb = stmAttackers & rooks))
         {
             if ((swap = RookValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= attacks_bb<ROOK>(to, occupied) & pieces(ROOK, QUEEN);
+            attackers |= attacks_bb<ROOK>(to, occupied) & orthoRays;
         }
 
-        else if ((bb = stmAttackers & pieces(QUEEN)))
+        else if ((bb = stmAttackers & queens))
         {
             swap = QueenValue - swap;
             //  implies that the previous recapture was done by a higher rated piece than a Queen (King is excluded)
             assert(swap >= res);
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= (attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN))
-                       | (attacks_bb<ROOK>(to, occupied) & pieces(ROOK, QUEEN));
+            attackers |= (attacks_bb<BISHOP>(to, occupied) & diagRays)
+                       | (attacks_bb<ROOK>(to, occupied) & orthoRays);
         }
 
         else  // KING
-              // If we "capture" with the king but the opponent still has attackers,
-              // reverse the result.
-            return (attackers & ~pieces(stm)) ? res ^ 1 : res;
+        {
+            // For king recaptures, test legality explicitly after moving the king.
+            const Bitboard kingAttackers = stmAttackers & pieces(KING);
+            assert(kingAttackers);
+            const Bitboard occAfterKing = occupied ^ least_significant_square_bb(kingAttackers);
+            return attackers_to_exist(to, occAfterKing, ~stm) ? res ^ 1 : res;
+        }
     }
 
     return bool(res);
