@@ -1281,23 +1281,57 @@ bool Position::see_ge(Move m, int threshold) const {
 
     assert(m.is_ok());
 
-    // Only deal with normal moves, assume others pass a simple SEE
-    if (m.type_of() != NORMAL)
+    const Color  us   = sideToMove;
+    const Square from = m.from_sq();
+    const Square to   = m.to_sq();
+    const Piece  movedPiece = piece_on(from);
+
+    assert(movedPiece != NO_PIECE);
+    assert(color_of(movedPiece) == us);
+
+    int      movedValue    = 0;
+    int      capturedValue = 0;
+    Bitboard occupied      = 0;
+
+    switch (m.type_of())
+    {
+    case NORMAL :
+        movedValue    = PieceValue[movedPiece];
+        capturedValue = PieceValue[piece_on(to)];
+        occupied      = pieces() ^ from ^ to;  // xoring to is important for pinned piece logic
+        break;
+
+    case PROMOTION :
+        movedValue    = PieceValue[make_piece(us, m.promotion_type())];
+        capturedValue = PieceValue[piece_on(to)];
+        occupied      = pieces() ^ from ^ to;
+        break;
+
+    case EN_PASSANT : {
+        const Square capsq = to - pawn_push(us);
+
+        assert(movedPiece == make_piece(us, PAWN));
+        assert(piece_on(to) == NO_PIECE);
+        assert(piece_on(capsq) == make_piece(~us, PAWN));
+
+        movedValue    = PawnValue;
+        capturedValue = PawnValue;
+        occupied      = (pieces() ^ from ^ capsq) | to;
+        break;
+    }
+
+    default :  // CASTLING
         return VALUE_ZERO >= threshold;
+    }
 
-    Square from = m.from_sq(), to = m.to_sq();
-
-    assert(piece_on(from) != NO_PIECE);
-
-    int swap = PieceValue[piece_on(to)] - threshold;
+    int swap = capturedValue - threshold;
     if (swap < 0)
         return false;
 
-    swap = PieceValue[piece_on(from)] - swap;
+    swap = movedValue - swap;
     if (swap <= 0)
         return true;
 
-    assert(color_of(piece_on(from)) == sideToMove);
     const Bitboard pawns     = pieces(PAWN);
     const Bitboard knights   = pieces(KNIGHT);
     const Bitboard bishops   = pieces(BISHOP);
@@ -1306,7 +1340,27 @@ bool Position::see_ge(Move m, int threshold) const {
     const Bitboard diagRays  = pieces(BISHOP, QUEEN);
     const Bitboard orthoRays = pieces(ROOK, QUEEN);
 
-    Bitboard occupied  = pieces() ^ from ^ to;  // xoring to is important for pinned piece logic
+    auto blockers_for_king_virtual = [&](Color c, Bitboard occ) {
+
+        const Square ksq = square<KING>(c);
+
+        Bitboard snipers = ((attacks_bb<ROOK>(ksq) & orthoRays) | (attacks_bb<BISHOP>(ksq) & diagRays))
+                         & pieces(~c) & occ;
+        Bitboard occNoSnipers = occ ^ snipers;
+        Bitboard blockers     = 0;
+        Bitboard ownPieces    = pieces(c) & occ;
+
+        while (snipers)
+        {
+            const Square   sniperSq = pop_lsb(snipers);
+            const Bitboard b        = between_bb(ksq, sniperSq) & occNoSnipers;
+
+            if (b && !more_than_one(b) && (b & ownPieces))
+                blockers |= b;
+        }
+        return blockers;
+    };
+
     Color    stm       = sideToMove;
     Bitboard attackers = attackers_to(to, occupied);
     Bitboard stmAttackers, bb;
@@ -1321,11 +1375,11 @@ bool Position::see_ge(Move m, int threshold) const {
         if (!(stmAttackers = attackers & pieces(stm)))
             break;
 
-        // Don't allow pinned pieces to attack as long as there are
-        // pinners on their original square.
-        if (pinners(~stm) & occupied)
+        // Recompute pinned pieces for the virtual occupancy used by SEE.
+        const Bitboard pinned = blockers_for_king_virtual(stm, occupied);
+        if (pinned)
         {
-            stmAttackers &= ~blockers_for_king(stm);
+            stmAttackers &= ~pinned | line_bb(square<KING>(stm), to);
 
             if (!stmAttackers)
                 break;
@@ -1342,9 +1396,13 @@ bool Position::see_ge(Move m, int threshold) const {
         else if (stmAttackers & queens)
             cls = 4;
         else  // KING
-              // If we "capture" with the king but the opponent still has attackers,
-              // reverse the result.
-            return (attackers & ~pieces(stm)) ? res ^ 1 : res;
+        {
+            // For king recaptures, test legality explicitly after moving the king.
+            const Bitboard kingAttackers = stmAttackers & pieces(KING);
+            assert(kingAttackers);
+            const Bitboard occAfterKing = occupied ^ least_significant_square_bb(kingAttackers);
+            return attackers_to_exist(to, occAfterKing, ~stm) ? res ^ 1 : res;
+        }
 
         switch (cls)
         {
