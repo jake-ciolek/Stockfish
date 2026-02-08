@@ -30,6 +30,9 @@
 #include <sstream>
 #include <string_view>
 #include <utility>
+#if defined(USE_AVX2)
+    #include <immintrin.h>
+#endif
 
 #include "bitboard.h"
 #include "history.h"
@@ -58,6 +61,25 @@ constexpr std::string_view PieceToChar(" PNBRQK  pnbrqk");
 
 static constexpr Piece Pieces[] = {W_PAWN, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING,
                                    B_PAWN, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING};
+
+#if defined(USE_AVX2) && (defined(__x86_64__) || defined(_M_X64))
+inline unsigned avx_nonzero_mask4_and(Bitboard x, Bitboard a0, Bitboard a1, Bitboard a2, Bitboard a3) {
+    const __m256i vx = _mm256_set1_epi64x(static_cast<long long>(x));
+    const __m256i va =
+      _mm256_set_epi64x(static_cast<long long>(a3), static_cast<long long>(a2),
+                        static_cast<long long>(a1), static_cast<long long>(a0));
+    const __m256i vi       = _mm256_and_si256(vx, va);
+    const __m256i vzero    = _mm256_setzero_si256();
+    const __m256i visZero  = _mm256_cmpeq_epi64(vi, vzero);
+    const unsigned zeroMsk = unsigned(_mm256_movemask_pd(_mm256_castsi256_pd(visZero)));
+    return (~zeroMsk) & 0x0F;  // bit i set iff (x & ai) != 0
+}
+#else
+inline unsigned avx_nonzero_mask4_and(Bitboard x, Bitboard a0, Bitboard a1, Bitboard a2, Bitboard a3) {
+    return unsigned(bool(x & a0)) | (unsigned(bool(x & a1)) << 1) | (unsigned(bool(x & a2)) << 2)
+         | (unsigned(bool(x & a3)) << 3);
+}
+#endif
 }  // namespace
 
 
@@ -1276,6 +1298,14 @@ bool Position::see_ge(Move m, int threshold) const {
         return true;
 
     assert(color_of(piece_on(from)) == sideToMove);
+    const Bitboard pawns     = pieces(PAWN);
+    const Bitboard knights   = pieces(KNIGHT);
+    const Bitboard bishops   = pieces(BISHOP);
+    const Bitboard rooks     = pieces(ROOK);
+    const Bitboard queens    = pieces(QUEEN);
+    const Bitboard diagRays  = pieces(BISHOP, QUEEN);
+    const Bitboard orthoRays = pieces(ROOK, QUEEN);
+
     Bitboard occupied  = pieces() ^ from ^ to;  // xoring to is important for pinned piece logic
     Color    stm       = sideToMove;
     Bitboard attackers = attackers_to(to, occupied);
@@ -1303,57 +1333,64 @@ bool Position::see_ge(Move m, int threshold) const {
 
         res ^= 1;
 
-        // Locate and remove the next least valuable attacker, and add to
-        // the bitboard 'attackers' any X-ray attackers behind it.
-        if ((bb = stmAttackers & pieces(PAWN)))
-        {
-            if ((swap = PawnValue - swap) < res)
-                break;
-            occupied ^= least_significant_square_bb(bb);
+        // AVX2-assisted class detection for pawn/knight/bishop/rook.
+        const unsigned m4 = avx_nonzero_mask4_and(stmAttackers, pawns, knights, bishops, rooks);
 
-            attackers |= attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN);
-        }
-
-        else if ((bb = stmAttackers & pieces(KNIGHT)))
-        {
-            if ((swap = KnightValue - swap) < res)
-                break;
-            occupied ^= least_significant_square_bb(bb);
-        }
-
-        else if ((bb = stmAttackers & pieces(BISHOP)))
-        {
-            if ((swap = BishopValue - swap) < res)
-                break;
-            occupied ^= least_significant_square_bb(bb);
-
-            attackers |= attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN);
-        }
-
-        else if ((bb = stmAttackers & pieces(ROOK)))
-        {
-            if ((swap = RookValue - swap) < res)
-                break;
-            occupied ^= least_significant_square_bb(bb);
-
-            attackers |= attacks_bb<ROOK>(to, occupied) & pieces(ROOK, QUEEN);
-        }
-
-        else if ((bb = stmAttackers & pieces(QUEEN)))
-        {
-            swap = QueenValue - swap;
-            //  implies that the previous recapture was done by a higher rated piece than a Queen (King is excluded)
-            assert(swap >= res);
-            occupied ^= least_significant_square_bb(bb);
-
-            attackers |= (attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN))
-                       | (attacks_bb<ROOK>(to, occupied) & pieces(ROOK, QUEEN));
-        }
-
+        unsigned cls;
+        if (m4)
+            cls = unsigned(lsb(Bitboard(m4)));
+        else if (stmAttackers & queens)
+            cls = 4;
         else  // KING
               // If we "capture" with the king but the opponent still has attackers,
               // reverse the result.
             return (attackers & ~pieces(stm)) ? res ^ 1 : res;
+
+        switch (cls)
+        {
+        case 0:
+            bb = stmAttackers & pawns;
+            if ((swap = PawnValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & diagRays;
+            continue;
+
+        case 1:
+            bb = stmAttackers & knights;
+            if ((swap = KnightValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            continue;
+
+        case 2:
+            bb = stmAttackers & bishops;
+            if ((swap = BishopValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & diagRays;
+            continue;
+
+        case 3:
+            bb = stmAttackers & rooks;
+            if ((swap = RookValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= attacks_bb<ROOK>(to, occupied) & orthoRays;
+            continue;
+
+        default:  // QUEEN
+            bb   = stmAttackers & queens;
+            swap = QueenValue - swap;
+            //  implies that the previous recapture was done by a higher rated piece than a Queen (King is excluded)
+            assert(swap >= res);
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= (attacks_bb<BISHOP>(to, occupied) & diagRays)
+                       | (attacks_bb<ROOK>(to, occupied) & orthoRays);
+            continue;
+        }
+
+        break;
     }
 
     return bool(res);
