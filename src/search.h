@@ -55,6 +55,9 @@ enum NodeType {
 class TranspositionTable;
 class ThreadPool;
 class OptionsMap;
+namespace Eval {
+struct DualNetEvalInfo;
+}
 
 namespace Search {
 
@@ -326,7 +329,7 @@ class Worker {
     TimePoint elapsed() const;
     TimePoint elapsed_time() const;
 
-    Value evaluate(const Position&);
+    Value evaluate(const Position&, Eval::DualNetEvalInfo* dualNetEvalInfo = nullptr);
 
     LimitsType limits;
 

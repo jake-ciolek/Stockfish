@@ -649,7 +649,7 @@ Value Search::Worker::search(
     Value bestValue, value, eval, maxValue, probCutBeta;
     bool  givesCheck, improving, priorCapture, opponentWorsening;
     bool  capture, ttCapture;
-    int   priorReduction;
+    int   priorReduction, probCutScale;
     Piece movedPiece;
 
     SearchedList capturesSearched;
@@ -662,6 +662,7 @@ Value Search::Worker::search(
     ss->moveCount = 0;
     bestValue     = -VALUE_INFINITE;
     maxValue      = VALUE_INFINITE;
+    probCutScale  = 100;
 
     // Check for the available remaining time
     if (is_mainthread())
@@ -713,6 +714,7 @@ Value Search::Worker::search(
     // Step 6. Static evaluation of the position
     Value      unadjustedStaticEval = VALUE_NONE;
     const auto correctionValue      = correction_value(*this, pos, ss);
+    bool       strongNnueDisagreementForProbCut = false;
     // Skip early pruning when in check
     if (ss->inCheck)
         ss->staticEval = eval = (ss - 2)->staticEval;
@@ -723,7 +725,11 @@ Value Search::Worker::search(
         // Never assume anything about values stored in TT
         unadjustedStaticEval = ttData.eval;
         if (!is_valid(unadjustedStaticEval))
-            unadjustedStaticEval = evaluate(pos);
+        {
+            Eval::DualNetEvalInfo dualNetEvalInfo;
+            unadjustedStaticEval = evaluate(pos, &dualNetEvalInfo);
+            strongNnueDisagreementForProbCut = dualNetEvalInfo.strongDisagreement;
+        }
 
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
@@ -734,7 +740,9 @@ Value Search::Worker::search(
     }
     else
     {
-        unadjustedStaticEval = evaluate(pos);
+        Eval::DualNetEvalInfo dualNetEvalInfo;
+        unadjustedStaticEval = evaluate(pos, &dualNetEvalInfo);
+        strongNnueDisagreementForProbCut = dualNetEvalInfo.strongDisagreement;
         ss->staticEval = eval = to_corrected_static_eval(unadjustedStaticEval, correctionValue);
 
         // Static evaluation is saved as it was before adjustment by correction history
@@ -936,7 +944,8 @@ Value Search::Worker::search(
     // Step 11. ProbCut
     // If we have a good enough capture (or queen promotion) and a reduced search
     // returns a value much above beta, we can (almost) safely prune the previous move.
-    probCutBeta = beta + 235 - 63 * improving;
+    probCutScale = strongNnueDisagreementForProbCut ? 120 : 100;
+    probCutBeta = beta + (235 - 63 * improving) * probCutScale / 100;
     if (depth >= 3
         && !is_decisive(beta)
         // If value from transposition table is lower than probCutBeta, don't attempt
@@ -984,7 +993,7 @@ Value Search::Worker::search(
 moves_loop:  // When in check, search starts here
 
     // Step 12. A small Probcut idea
-    probCutBeta = beta + 418;
+    probCutBeta = beta + 418 * probCutScale / 100;
     if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
         && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
         return probCutBeta;
@@ -1752,9 +1761,9 @@ TimePoint Search::Worker::elapsed() const {
 
 TimePoint Search::Worker::elapsed_time() const { return main_manager()->tm.elapsed_time(); }
 
-Value Search::Worker::evaluate(const Position& pos) {
+Value Search::Worker::evaluate(const Position& pos, Eval::DualNetEvalInfo* dualNetEvalInfo) {
     return Eval::evaluate(networks[numaAccessToken], pos, accumulatorStack, refreshTable,
-                          optimism[pos.side_to_move()]);
+                          optimism[pos.side_to_move()], dualNetEvalInfo);
 }
 
 namespace {

@@ -42,6 +42,11 @@ struct AccumulatorCaches;
 class AccumulatorStack;
 }
 
+struct DualNetEvalInfo {
+    bool bothNetsUsed       = false;
+    bool strongDisagreement = false;
+};
+
 std::string trace(Position& pos, const Eval::NNUE::Networks& networks);
 
 int   simple_eval(const Position& pos);
@@ -50,7 +55,8 @@ Value evaluate(const NNUE::Networks&          networks,
                const Position&                pos,
                Eval::NNUE::AccumulatorStack&  accumulators,
                Eval::NNUE::AccumulatorCaches& caches,
-               int                            optimism);
+               int                            optimism,
+               DualNetEvalInfo*               dualNetEvalInfo = nullptr);
 }  // namespace Eval
 
 }  // namespace Stockfish

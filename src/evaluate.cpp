@@ -31,11 +31,18 @@
 #include "nnue/network.h"
 #include "nnue/nnue_misc.h"
 #include "position.h"
+#include "misc.h"
 #include "types.h"
 #include "uci.h"
 #include "nnue/nnue_accumulator.h"
 
 namespace Stockfish {
+
+namespace {
+
+constexpr Value StrongDualNetDisagreementThreshold = 180;
+
+}  // namespace
 
 // Returns a static, purely materialistic evaluation of the position from
 // the point of view of the side to move. It can be divided by PawnValue to get
@@ -54,23 +61,43 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
                      const Position&                pos,
                      Eval::NNUE::AccumulatorStack&  accumulators,
                      Eval::NNUE::AccumulatorCaches& caches,
-                     int                            optimism) {
+                     int                            optimism,
+                     Eval::DualNetEvalInfo*         dualNetEvalInfo) {
 
     assert(!pos.checkers());
 
+    if (dualNetEvalInfo)
+        *dualNetEvalInfo = {};
+
     bool smallNet           = use_smallnet(pos);
+    bool bothNetsUsed       = false;
     auto [psqt, positional] = smallNet ? networks.small.evaluate(pos, accumulators, caches.small)
                                        : networks.big.evaluate(pos, accumulators, caches.big);
 
     Value nnue = (125 * psqt + 131 * positional) / 128;
+    Value smallNetNnue = smallNet ? nnue : VALUE_NONE;
 
     // Re-evaluate the position when higher eval accuracy is worth the time spent
     if (smallNet && (std::abs(nnue) < 277))
     {
         std::tie(psqt, positional) = networks.big.evaluate(pos, accumulators, caches.big);
         nnue                       = (125 * psqt + 131 * positional) / 128;
+        const Value disagreementAbsDiff = std::abs(nnue - smallNetNnue);
+        const bool  strongDisagreement =
+          disagreementAbsDiff >= StrongDualNetDisagreementThreshold;
+        dbg_hit_on(strongDisagreement, 25);
+
+        if (dualNetEvalInfo)
+        {
+            dualNetEvalInfo->bothNetsUsed       = true;
+            dualNetEvalInfo->strongDisagreement = strongDisagreement;
+        }
+
+        bothNetsUsed               = true;
         smallNet                   = false;
     }
+
+    dbg_hit_on(bothNetsUsed, 24);
 
     // Blend optimism and eval with nnue complexity
     int nnueComplexity = std::abs(psqt - positional);
