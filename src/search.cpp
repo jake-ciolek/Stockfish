@@ -45,6 +45,7 @@
 #include "syzygy/tbprobe.h"
 #include "thread.h"
 #include "timeman.h"
+#include "tune.h"
 #include "tt.h"
 #include "types.h"
 #include "uci.h"
@@ -66,6 +67,13 @@ namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+
+int QSearchFutilityBase     = 351;
+int QSearchSeeLowerGate     = -80;
+int QSearchSeeInnerOffset   = 0;
+TUNE(SetRange(128, 512), QSearchFutilityBase);
+TUNE(SetRange(-160, 0), QSearchSeeLowerGate);
+TUNE(SetRange(-64, 64), QSearchSeeInnerOffset);
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -1600,7 +1608,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         if (bestValue > alpha)
             alpha = bestValue;
 
-        futilityBase = ss->staticEval + 351;
+        futilityBase = ss->staticEval + QSearchFutilityBase;
     }
 
     const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
@@ -1649,7 +1657,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
 
                 // If static exchange evaluation is low enough
                 // we can prune this move.
-                if (!pos.see_ge(move, alpha - futilityBase))
+                if (!pos.see_ge(move, alpha - futilityBase + QSearchSeeInnerOffset))
                 {
                     bestValue = std::max(bestValue, std::min(alpha, futilityBase));
                     continue;
@@ -1661,7 +1669,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
                 continue;
 
             // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -80))
+            if (!pos.see_ge(move, QSearchSeeLowerGate))
                 continue;
         }
 
