@@ -77,9 +77,9 @@ int CaptureCheckSeeMarginHistDiv = 29;
 TUNE(SetRange(128, 512), QSearchFutilityBase);
 TUNE(SetRange(-160, 0), QSearchSeeLowerGate);
 TUNE(SetRange(-64, 64), QSearchSeeInnerOffset);
-TUNE(SetRange(0, 256), CaptureCheckSeeMarginBonus);
-TUNE(SetRange(64, 320), CaptureCheckSeeMarginDepth);
-TUNE(SetRange(8, 96), CaptureCheckSeeMarginHistDiv);
+TUNE(SetRange(-256, 256), CaptureCheckSeeMarginBonus);
+TUNE(SetRange(-320, 320), CaptureCheckSeeMarginDepth);
+TUNE(SetRange(-96, 96), CaptureCheckSeeMarginHistDiv);
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -1087,9 +1087,10 @@ moves_loop:  // When in check, search starts here
 
                 // SEE based pruning for captures and checks
                 // Avoid pruning sacrifices of our last piece for stalemate
+                // HistDiv=0 disables the history contribution in this margin term.
+                int histMargin = CaptureCheckSeeMarginHistDiv ? captHist / CaptureCheckSeeMarginHistDiv : 0;
                 int margin = std::max(CaptureCheckSeeMarginBonus * int(capture && givesCheck)
-                                        + CaptureCheckSeeMarginDepth * depth
-                                        + captHist / CaptureCheckSeeMarginHistDiv,
+                                        + CaptureCheckSeeMarginDepth * depth + histMargin,
                                       0);
                 if ((alpha >= VALUE_DRAW || pos.non_pawn_material(us) != PieceValue[movedPiece])
                     && !pos.see_ge(move, -margin))

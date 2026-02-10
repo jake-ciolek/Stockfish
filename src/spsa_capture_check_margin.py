@@ -3,9 +3,9 @@
 SPSA tuner for capture/check SEE margin parameters using cutechess-cli.
 
 Targets:
-  - CaptureCheckSeeMarginBonus   in [0, 256]
-  - CaptureCheckSeeMarginDepth   in [64, 320]
-  - CaptureCheckSeeMarginHistDiv in [8, 96]
+  - CaptureCheckSeeMarginBonus   in [-256, 256]
+  - CaptureCheckSeeMarginDepth   in [-320, 320]
+  - CaptureCheckSeeMarginHistDiv in [-96, 96]
 """
 
 from __future__ import annotations
@@ -227,7 +227,7 @@ def build_params(args: argparse.Namespace) -> List[Param]:
     return [
         Param(
             name="CaptureCheckSeeMarginBonus",
-            lo=0,
+            lo=-256,
             hi=256,
             theta=float(args.init_bonus),
             a=float(args.a_bonus),
@@ -235,7 +235,7 @@ def build_params(args: argparse.Namespace) -> List[Param]:
         ),
         Param(
             name="CaptureCheckSeeMarginDepth",
-            lo=64,
+            lo=-320,
             hi=320,
             theta=float(args.init_depth),
             a=float(args.a_depth),
@@ -243,7 +243,7 @@ def build_params(args: argparse.Namespace) -> List[Param]:
         ),
         Param(
             name="CaptureCheckSeeMarginHistDiv",
-            lo=8,
+            lo=-96,
             hi=96,
             theta=float(args.init_hist_div),
             a=float(args.a_hist_div),
