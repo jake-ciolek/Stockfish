@@ -1659,8 +1659,13 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
             if (!capture)
                 continue;
 
-            // Do not search moves with bad enough SEE values
-            if (!pos.see_ge(move, -80))
+            const Piece capturedPiece     = pos.piece_on(move.to_sq());
+            const bool  highValueCaptured = type_of(capturedPiece) >= ROOK;
+
+            const int seeThreshold =
+              -80 + int(moveCount > 1) * 80 + int(givesCheck) * -80 + int(highValueCaptured) * 80;
+
+            if (!pos.see_ge(move, seeThreshold))
                 continue;
         }
 
