@@ -33,6 +33,7 @@
 #include "layers/sqr_clipped_relu.h"
 #include "nnue_common.h"
 #include "nnz_helper.h"
+#include "f4_residual.h"
 
 namespace Stockfish::Eval::NNUE {
 
@@ -61,6 +62,8 @@ struct NetworkArchitecture {
     Layers::ClippedReLU<FC_1_OUTPUTS, WeightScaleBits>                             ac_1;
     Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1>                fc_2;
 
+    F4Residual f4;
+
     // Hash value embedded in the evaluation file
     static constexpr u32 get_hash_value() {
         // input slice hash
@@ -75,21 +78,21 @@ struct NetworkArchitecture {
         hashValue = decltype(ac_1)::get_hash_value(hashValue);
         hashValue = decltype(fc_2)::get_hash_value(hashValue);
 
-        return hashValue;
+        return hashValue ^ 0x46345231u;
     }
 
     // Read network parameters
     bool read_parameters(std::istream& stream) {
         return fc_0.read_parameters(stream) && ac_0.read_parameters(stream)
             && fc_1.read_parameters(stream) && ac_1.read_parameters(stream)
-            && fc_2.read_parameters(stream);
+            && fc_2.read_parameters(stream) && f4.read_parameters(stream);
     }
 
     // Write network parameters
     bool write_parameters(std::ostream& stream) const {
         return fc_0.write_parameters(stream) && ac_0.write_parameters(stream)
             && fc_1.write_parameters(stream) && ac_1.write_parameters(stream)
-            && fc_2.write_parameters(stream);
+            && fc_2.write_parameters(stream) && f4.write_parameters(stream);
     }
 
     i32 propagate(const TransformedFeatureType* transformedFeatures,
@@ -137,6 +140,7 @@ struct NetworkArchitecture {
           static_cast<i64>(HiddenOneVal) * static_cast<i64>(1U << WeightScaleBits) * 2;
 
         i32 outputValue = static_cast<i32>((static_cast<i64>(fwdOut) * multiplier) / denominator);
+        outputValue += f4.propagate(transformedFeatures);
         return outputValue;
     }
 
@@ -149,6 +153,7 @@ struct NetworkArchitecture {
         // hash_combine(h, ac_sqr_1.get_content_hash()); TODO
         hash_combine(h, ac_1.get_content_hash());
         hash_combine(h, fc_2.get_content_hash());
+        hash_combine(h, f4.get_content_hash());
         hash_combine(h, get_hash_value());
         return h;
     }
