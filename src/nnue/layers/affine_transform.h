@@ -156,13 +156,17 @@ class AffineTransform {
         // At load time, pre-permute the weights to match the per-128-bit-lane interleaving that
         // the previous layer produces, either via SqrClippedReLU::propagate_pair() or via the
         // separate SqrClippedReLU/ClippedReLU propagate() calls, so no shuffle is needed at runtime.
-        const IndexType block = inputIndex / 32;
-        const IndexType chunk = (inputIndex % 32) / 4;
+        if (InputDimensions != 96 || inputIndex < 64)
+        {
+            const IndexType block = inputIndex / 32;
+            const IndexType chunk = (inputIndex % 32) / 4;
     #if defined(USE_AVX512)
-        inputIndex = block * 32 + ((chunk % 4) * 2 + chunk / 4) * 4 + inputIndex % 4;
+            inputIndex = block * 32 + ((chunk % 4) * 2 + chunk / 4) * 4 + inputIndex % 4;
     #else
-        inputIndex = block * 32 + ((chunk % 2) * 4 + chunk / 2) * 4 + inputIndex % 4;
+            inputIndex = block * 32 + ((chunk % 2) * 4 + chunk / 2) * 4 + inputIndex % 4;
     #endif
+        }
+
 #endif
         return inputIndex / 4 * OutputDimensions * 4 + i / PaddedInputDimensions * 4
              + inputIndex % 4;
@@ -202,6 +206,9 @@ class AffineTransform {
         hash_combine(h, get_hash_value(0));
         return h;
     }
+
+    const OutputType* get_biases() const { return biases; }
+    const i8*         get_weights() const { return weights; }
 
     // Forward propagation
     void propagate(const InputType* input, OutputType* output) const {

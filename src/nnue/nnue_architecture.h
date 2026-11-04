@@ -44,7 +44,7 @@ using PSQFeatureSet    = Features::K32H3;
 // Number of input feature dimensions after conversion
 constexpr IndexType L1 = 1024;
 constexpr int       L2 = 32;
-constexpr int       L3 = 32;
+constexpr int       L3 = 16;
 
 constexpr IndexType LayerStacks = 32;
 
@@ -60,6 +60,114 @@ struct NetworkArchitecture {
     Layers::SqrClippedReLU<FC_1_OUTPUTS, WeightScaleBits>                          ac_sqr_1;
     Layers::ClippedReLU<FC_1_OUTPUTS, WeightScaleBits>                             ac_1;
     Layers::AffineTransform<FC_0_OUTPUTS * 2 + FC_1_OUTPUTS * 2, 1>                fc_2;
+
+
+#if defined(USE_AVX2)
+    alignas(32) i8 fusedOutputWeights[32];
+
+    void prepare_fused_weights() {
+        for (int i = 0; i < 32; ++i)
+        {
+    #if defined(USE_AVX512) && defined(USE_VNNI)
+            const int j = (i % 16 / 8) * 16 + i % 8 + (i / 16) * 8;
+    #else
+            const int j = i % 4 + (i / 4 % 2) * 16 + (i / 8 % 2) * 4 + (i / 16) * 8;
+    #endif
+            fusedOutputWeights[j] = fc_2.get_weights()[64 + i];
+        }
+    }
+
+    #if defined(USE_AVXVNNI) && !defined(USE_AVX512)
+    i32 propagate_fused(const i32* input) const {
+        const auto* p      = reinterpret_cast<const __m256i*>(input);
+        const auto  w0     = _mm256_packs_epi32(p[0], p[1]);
+        const auto  w1     = _mm256_packs_epi32(p[2], p[3]);
+        const auto  square = _mm256_packs_epi16(_mm256_srli_epi16(_mm256_mulhi_epi16(w0, w0), 5),
+                                                _mm256_srli_epi16(_mm256_mulhi_epi16(w1, w1), 5));
+        const auto  linear =
+          _mm256_packs_epi16(_mm256_srli_epi16(_mm256_max_epi16(w0, _mm256_setzero_si256()), 7),
+                             _mm256_srli_epi16(_mm256_max_epi16(w1, _mm256_setzero_si256()), 7));
+        const auto* output   = reinterpret_cast<const __m256i*>(fc_2.get_weights());
+        auto        shortcut = _mm256_setzero_si256();
+        SIMD::m256_add_dpbusd_epi32(shortcut, square, output[0]);
+        SIMD::m256_add_dpbusd_epi32(shortcut, linear, output[1]);
+
+        __m256i sums[4][2];
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 2; ++j)
+                sums[i][j] =
+                  i == 0
+                    ? _mm256_load_si256(reinterpret_cast<const __m256i*>(fc_1.get_biases()) + j)
+                    : _mm256_setzero_si256();
+
+        constexpr int order[16] = {5, 14, 0, 11, 2, 10, 3, 9, 15, 6, 1, 4, 13, 7, 12, 8};
+        alignas(32) static constexpr int masks[8][8] = {
+          {0, 0, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 1, 1, 1}, {2, 2, 2, 2, 2, 2, 2, 2},
+          {3, 3, 3, 3, 3, 3, 3, 3}, {4, 4, 4, 4, 4, 4, 4, 4}, {5, 5, 5, 5, 5, 5, 5, 5},
+          {6, 6, 6, 6, 6, 6, 6, 6}, {7, 7, 7, 7, 7, 7, 7, 7}};
+        #pragma GCC unroll 16
+        for (int i = 0; i < 16; ++i)
+        {
+            const int group = order[i];
+            __m256i   mask;
+            asm("vmovdqa %1,%0" : "=x"(mask) : "m"(masks[group % 8]));
+            const auto  value   = _mm256_permutevar8x32_epi32(group < 8 ? square : linear, mask);
+            const auto* weights = reinterpret_cast<const __m256i*>(fc_1.get_weights() + 64 * group);
+            SIMD::m256_add_dpbusd_epi32(sums[i % 4][0], value, weights[0]);
+            SIMD::m256_add_dpbusd_epi32(sums[i % 4][1], value, weights[1]);
+        }
+        for (int i = 1; i < 4; ++i)
+            for (int j = 0; j < 2; ++j)
+                sums[0][j] = _mm256_add_epi32(sums[0][j], sums[i][j]);
+        return finish_fused(_mm256_packs_epi32(sums[0][0], sums[0][1]), shortcut);
+    }
+    #else
+    i32 propagate_fused(const u8* input) const {
+        #if defined(USE_AVX512) && defined(USE_VNNI)
+        auto sum0     = _mm512_load_si512(fc_1.get_biases());
+        auto sum1     = _mm512_setzero_si512();
+        auto shortcut = _mm512_setzero_si512();
+        SIMD::m512_add_dpbusd_epi32(shortcut, _mm512_load_si512(input),
+                                    _mm512_load_si512(fc_2.get_weights()));
+        for (int i = 0; i < 16; i += 2)
+        {
+            SIMD::m512_add_dpbusd_epi32(sum0, _mm512_set1_epi32(load_as<i32>(input + 4 * i)),
+                                        _mm512_load_si512(fc_1.get_weights() + 64 * i));
+            SIMD::m512_add_dpbusd_epi32(sum1, _mm512_set1_epi32(load_as<i32>(input + 4 * (i + 1))),
+                                        _mm512_load_si512(fc_1.get_weights() + 64 * (i + 1)));
+        }
+        const auto words = _mm512_cvtsepi32_epi16(_mm512_add_epi32(sum0, sum1));
+        return finish_fused(words, _mm256_setzero_si256()) + SIMD::m512_hadd(shortcut, 0);
+        #else
+        auto sum0     = _mm256_load_si256(reinterpret_cast<const __m256i*>(fc_1.get_biases()));
+        auto sum1     = _mm256_load_si256(reinterpret_cast<const __m256i*>(fc_1.get_biases()) + 1);
+        auto shortcut = _mm256_setzero_si256();
+        const auto* output = reinterpret_cast<const __m256i*>(fc_2.get_weights());
+        SIMD::m256_add_dpbusd_epi32(
+          shortcut, _mm256_load_si256(reinterpret_cast<const __m256i*>(input)), output[0]);
+        SIMD::m256_add_dpbusd_epi32(
+          shortcut, _mm256_load_si256(reinterpret_cast<const __m256i*>(input) + 1), output[1]);
+        for (int i = 0; i < 16; ++i)
+        {
+            const auto  value   = _mm256_set1_epi32(load_as<i32>(input + 4 * i));
+            const auto* weights = reinterpret_cast<const __m256i*>(fc_1.get_weights() + 64 * i);
+            SIMD::m256_add_dpbusd_epi32(sum0, value, weights[0]);
+            SIMD::m256_add_dpbusd_epi32(sum1, value, weights[1]);
+        }
+        return finish_fused(_mm256_packs_epi32(sum0, sum1), shortcut);
+        #endif
+    }
+    #endif
+
+    i32 finish_fused(__m256i words, __m256i sum) const {
+        const auto square = _mm256_srli_epi16(_mm256_mulhi_epi16(words, words), 3);
+        const auto linear = _mm256_srli_epi16(_mm256_max_epi16(words, _mm256_setzero_si256()), 6);
+        const auto values = _mm256_packs_epi16(square, linear);
+        SIMD::m256_add_dpbusd_epi32(
+          sum, values, _mm256_load_si256(reinterpret_cast<const __m256i*>(fusedOutputWeights)));
+        return SIMD::m256_hadd(sum, fc_2.get_biases()[0]);
+    }
+#endif
 
     // Hash value embedded in the evaluation file
     static constexpr u32 get_hash_value() {
@@ -80,9 +188,14 @@ struct NetworkArchitecture {
 
     // Read network parameters
     bool read_parameters(std::istream& stream) {
-        return fc_0.read_parameters(stream) && ac_0.read_parameters(stream)
-            && fc_1.read_parameters(stream) && ac_1.read_parameters(stream)
-            && fc_2.read_parameters(stream);
+        const bool ok = fc_0.read_parameters(stream) && ac_0.read_parameters(stream)
+                     && fc_1.read_parameters(stream) && ac_1.read_parameters(stream)
+                     && fc_2.read_parameters(stream);
+#if defined(USE_AVX2)
+        if (ok)
+            prepare_fused_weights();
+#endif
+        return ok;
     }
 
     // Write network parameters
@@ -105,27 +218,35 @@ struct NetworkArchitecture {
         Buffer buffer;
 
         fc_0.propagate(transformedFeatures, buffer.fc_0_out, nnzInfo);
-#if defined(USE_PAIR_ACTIVATIONS)
+#if defined(USE_AVXVNNI) && !defined(USE_AVX512)
+        i32 fwdOut = propagate_fused(buffer.fc_0_out);
+#else
+    #if defined(USE_PAIR_ACTIVATIONS)
         ac_sqr_0.propagate_pair(buffer.fc_0_out, buffer.concat_buffer,
                                 buffer.concat_buffer + FC_0_OUTPUTS);
-#else
+    #else
         ac_sqr_0.propagate(buffer.fc_0_out, buffer.concat_buffer);
         ac_0.propagate(buffer.fc_0_out, buffer.concat_buffer + FC_0_OUTPUTS);
-#endif
+    #endif
 
+    #if defined(USE_AVX2)
+        i32 fwdOut = propagate_fused(buffer.concat_buffer);
+    #else
         fc_1.propagate(buffer.concat_buffer, buffer.fc_1_out);
-#if defined(USE_PAIR_ACTIVATIONS)
+        #if defined(USE_PAIR_ACTIVATIONS)
         ac_sqr_1.propagate_pair(buffer.fc_1_out, buffer.concat_buffer + FC_0_OUTPUTS * 2,
                                 buffer.concat_buffer + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
-#else
+        #else
         ac_sqr_1.propagate(buffer.fc_1_out, buffer.concat_buffer + FC_0_OUTPUTS * 2);
         ac_1.propagate(buffer.fc_1_out, buffer.concat_buffer + FC_0_OUTPUTS * 2 + FC_1_OUTPUTS);
-#endif
+        #endif
 
         fc_2.propagate(buffer.concat_buffer, buffer.fc_2_out);
 
         static_assert(FC_0_OUTPUTS >= 2);
         i32 fwdOut = buffer.fc_2_out[0];
+    #endif
+#endif
         i32 skip_0 = buffer.fc_0_out[FC_0_OUTPUTS - 2] - buffer.fc_0_out[FC_0_OUTPUTS - 1];
         fwdOut += skip_0;
 
